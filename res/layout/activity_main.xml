@@ -3,7 +3,7 @@
     android:id="@+id/container"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/bg"
+    android:background="#fffc00"
     tools:context="com.example.movr.MainActivity"
     tools:ignore="MergeRootFrame" >
     
@@ -15,7 +15,7 @@
         android:layout_centerVertical="true"
         android:gravity="center"
         android:textSize="48sp"
-        android:textColor="#ffffff" />
+        android:textColor="#222222" />
     
 
     <Button
@@ -25,7 +25,7 @@
         android:layout_alignParentBottom="true"
         android:layout_alignParentLeft="true"
         android:textSize="32sp"
-        android:textColor="#ffffff"
+        android:textColor="#222222"
         android:background="?android:attr/dividerHorizontal" />
 
 </RelativeLayout>

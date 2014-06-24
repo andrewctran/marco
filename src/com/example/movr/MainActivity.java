@@ -8,6 +8,7 @@ import android.support.v7.app.ActionBar;
 import android.support.v4.app.Fragment;
 import android.os.Bundle;
 import android.app.Activity;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -26,17 +27,23 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 	private SensorManager senSensorManager;
 	private Sensor senAccelerometer;
 	private TextView accelView;
-	private int on = 0;
-	private float[] cachedAcceleration = new float[3];
-	private ArrayList<Double> accelerationAtTimeT = new ArrayList<Double>();
-	private double[] arrayListCopy;
-	private int start;
-	private ArrayList<Integer> updateTimes = new ArrayList<Integer>();
-	private int updateTimesArr[];
+	private boolean on = false;
+
+	private float[] acceleration = new float[3];
+	private float[] prevAcceleration = new float[3];
+
+	private ArrayList<Double> data = new ArrayList<Double>();
+	private double[] data_as_array;
+
+	private long start;
+	private ArrayList<Long> times = new ArrayList<Long>();
+	private long[] times_as_array;
 	private Calendar c;
 
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
+
+		// miscellaneous init
 		super.onCreate(savedInstanceState);
 		setContentView(R.layout.activity_main);
 		accelView = (TextView)findViewById(R.id.acceltxt);
@@ -47,9 +54,11 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
     	senAccelerometer = senSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
     	senSensorManager.registerListener(this, senAccelerometer, SensorManager.SENSOR_DELAY_NORMAL);
     	
+    	// Start button setup
     	Button _button = (Button) findViewById(R.id.button1);
     	_button.setText("Start");
     	_button.setOnClickListener(this);
+    	accelView.setText("ready");
     	
 	}
 
@@ -59,46 +68,33 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 	// The biggest one is probs the direction of travel
 	//
 	public void onSensorChanged(SensorEvent event) {
-		if (on == 1 && (c.get(Calendar.SECOND) - start >= 10)) {
-			updateTimes.add(c.get(Calendar.SECOND));
-			float[] rawAcceleration = new float[3];
-			float[] results = new float[3];
-			
+		if (on == true) 
+		{
 			Sensor mySensor = event.sensor;
-			if (mySensor.getType() == Sensor.TYPE_ACCELEROMETER) {			
-				rawAcceleration = event.values;
-				cachedAcceleration = highPassFilter(rawAcceleration, cachedAcceleration);
-				results = lowPassFilter(cachedAcceleration, results);
-				accelerationAtTimeT.add((double) results[1]);
-				//accelView.setText("" + Math.sqrt(cachedAcceleration[0]*cachedAcceleration[0] + cachedAcceleration[1]*cachedAcceleration[1] + cachedAcceleration[2]* cachedAcceleration[2]));
-				//accelView.setText("" + Math.sqrt(rawAcceleration[0]*rawAcceleration[0] + rawAcceleration[1]*rawAcceleration[1] + rawAcceleration[2]* rawAcceleration[2]));
+			if (mySensor.getType() == Sensor.TYPE_ACCELEROMETER) 
+			{			
+				//times.add(c.get(Calendar.SECOND));
+				times.add(System.currentTimeMillis());
+				acceleration = highPassFilter(event.values.clone(), prevAcceleration);
+				acceleration = lowPassFilter(event.values.clone(), acceleration);
+
+				// which entry do we want??
+				data.add((double)acceleration[1]);
 			}
-		}
-		else {
-			senSensorManager.unregisterListener(this);
-			arrayListCopy = new double[accelerationAtTimeT.size()];
-			int z = 0;
-			for (double a : accelerationAtTimeT) {
-				arrayListCopy[z] = (float) a;
-				z++;
-			}
-			updateTimesArr = new int[updateTimes.size()];
-			updateTimesArr = convertIntegers(updateTimes);
-			accelView.setText("" + getDistance(getVelocity((double[])arrayListCopy)));
 		}
 	}
 	
 	// High-pass filter to remove DC components
-	public float[] highPassFilter(float[] raw, float[] ramped) {
-		float[] output = new float[3];
+	public float[] highPassFilter(float[] input, float[] output) {
+		float[] result = new float[3];
 		float kFilteringFactor = 0.1f;
-		ramped[0] = raw[0] * kFilteringFactor + ramped[0] * (1.0f - kFilteringFactor);
-		ramped[1] = raw[1] * kFilteringFactor + ramped[1] * (1.0f - kFilteringFactor);
-		ramped[2] = raw[2] * kFilteringFactor + ramped[2] * (1.0f - kFilteringFactor);
-		output[0] = raw[0] - ramped[0];
-		output[1] = raw[1] - ramped[1];
-		output[2] = raw[2] - ramped[2];
-		return output;
+		output[0] = input[0] * kFilteringFactor + output[0] * (1.0f - kFilteringFactor);
+		output[1] = input[1] * kFilteringFactor + output[1] * (1.0f - kFilteringFactor);
+		output[2] = input[2] * kFilteringFactor + output[2] * (1.0f - kFilteringFactor);
+		result[0] = input[0] - output[0];
+		result[1] = input[1] - output[1];
+		result[2] = input[2] - output[2];
+		return result;
 	}
 	
 	// Low-pass filter to remove noise
@@ -128,55 +124,128 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 	
 	@Override
 	public void onClick(View v) {
-	    // TODO Auto-generated method stub
 	    switch (v.getId()){
 	        case R.id.button1:
 	        	Button _button = (Button) findViewById(R.id.button1);
-	        	if (on == 1) {
+
+	        	if (on == true) //STOP LISTENING...DO CALCULATIONS
+	        	{
 	        		senSensorManager.unregisterListener(this);
 	        		_button.setText("Start");
-	        		on = 0;
-	        	}
-	        	else {
-					start = c.get(Calendar.SECOND);
+	        		on = false;
 
+	        		// copy data from ArrayList to array
+					data_as_array = new double[data.size()];
+					int count = 0;
+					for (double entry : data) 
+					{
+						data_as_array[count] = (double)entry;
+						count++;
+					}
+
+					// copy update times from ArrayList to array
+					times_as_array = new long[times.size()];
+					times_as_array = convertLongs(times);
+
+	        		double[] velocity = getVelocity(data_as_array, times_as_array);
+	        		double distance = getDistance(velocity, times_as_array);
+	        		Log.v("Sum acceleration", "" + sumArray(data_as_array));
+	        		Log.v("Sum velocity", "" + sumArray(velocity));
+	        		Log.v("Sum time", "" + sumArray(times_as_array));
+	        		accelView.setText("You moved: " + distance);
+	        	}
+	        	else // on == false...START LISTENING
+	        	{ 
+					//start = c.get(Calendar.SECOND);
+					start = System.currentTimeMillis();
+					data.clear();
+					times.clear();
 	        		senSensorManager.registerListener(this, senAccelerometer, SensorManager.SENSOR_DELAY_NORMAL);
 	        		_button.setText("Stop");
-	        		accelerationAtTimeT.clear();
-	        		on = 1;
+	        		on = true;
+	        		accelView.setText("walking!");
 	        	}
 	            break;
 	    }
 	}
 
-	private double getDistance(double[] velocity) {
+	private double getDistance(double[] velocity, long[] distribution) {
 		double distance = 0;
-		int i = 1;
-		for (double v : velocity) {
-			distance += (v * (updateTimesArr[i] - updateTimesArr[i - 1]));
+		double[] durations = getDurations(distribution);
+		int i = 0;
+		Log.v("velocity array length", "" + velocity.length);
+		for (double v : velocity) 
+		{
+			distance += (v * durations[i]);
 			i++;
 		}
 		return distance;
 	}
 
 	// Assumes v_initial = 0
-	private double[] getVelocity(double[] acceleration) {
+	// potentially poor design decision
+	private double[] getVelocity(double[] acceleration, long[] distribution) {
 		double velocity[] = new double[acceleration.length];
-		velocity[0] = 0;
-		int i = 1;
-		for (double a : acceleration) {
-			velocity[i] = velocity[i - 1] + a*(updateTimesArr[i] - updateTimesArr[i - 1]);
+		double[] durations = getDurations(distribution);
+		//velocity[0] = 0;
+		int i = 0;
+		Log.v("acceleration array length", "" + acceleration.length);
+		Log.v("time array length", "" + durations.length);
+		for (double a : acceleration) 
+		{
+			if (i == 0) velocity[i] = 0;
+			else velocity[i] = velocity[i - 1] + a * durations[i];
+			Log.v("dv/dt", "" + a);
+			Log.v("t", "" + durations[i]);
+			Log.v("raw t", "" + distribution[i]);
 			i++;
 		}
 		return velocity;
 	}
 
-	private int[] convertIntegers(ArrayList<Integer> integers)
+	private double[] getDurations(long[] times) {
+		double[] durations = new double[times.length];
+		for (int i = 0; i < times.length; i++) {
+			System.out.println(times[i]);
+			if (i == 0) durations[i] = times[i] - times[0];
+			else durations[i] = times[i] - times[i - 1];
+		}
+		for (int i = 0; i < durations.length; i++) {
+			durations[i] /= 1000.0;
+		}
+		return durations;
+	}
+
+	private double sumArray(double[] arr) {
+		double sum = 0.0;
+		for (double x : arr) {
+			sum += x;
+		}
+		return sum;
+	}
+
+	private int sumArray(int[] arr) {
+		int sum = 0;
+		for (int x : arr) {
+			sum += x;
+		}
+		return sum;
+	}
+
+	private long sumArray(long[] arr) {
+		long sum = 0;
+		for (long x : arr) {
+			sum += x;
+		}
+		return sum;
+	}
+
+	private long[] convertLongs(ArrayList<Long> longs)
 	{
-	    int[] ret = new int[integers.size()];
-	    for (int i=0; i < ret.length; i++)
+	    long[] ret = new long[longs.size()];
+	    for (int i = 0; i < ret.length; i++)
 	    {
-	        ret[i] = integers.get(i).intValue();
+	        ret[i] = longs.get(i).longValue();
 	    }
 	    return ret;
 	}	
