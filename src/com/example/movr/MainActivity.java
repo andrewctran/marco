@@ -73,13 +73,24 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 			Sensor mySensor = event.sensor;
 			if (mySensor.getType() == Sensor.TYPE_ACCELEROMETER) 
 			{			
-				//times.add(c.get(Calendar.SECOND));
 				times.add(System.currentTimeMillis());
-				acceleration = highPassFilter(event.values.clone(), prevAcceleration);
-				acceleration = lowPassFilter(event.values.clone(), acceleration);
+
+				// PROCESS SENSOR DATA
+				acceleration = highPassFilter(event.values.clone(), prevAcceleration);	// remove DC components
+
+				acceleration = lowPassFilter(event.values.clone(), acceleration);		// double exponential smoothing
+				acceleration = lowPassFilter(event.values.clone(), acceleration);		// (low pass filter)
+
+				// thresholding
+				// run tests in R to find optimal threshold value
+				if (Math.abs(acceleration[1]) < 0.3) {
+					acceleration[1] = (float) 0.0;
+				}
+
 
 				// which entry do we want??
 				data.add((double)acceleration[1]);
+				Log.v("data.add", "" + acceleration[1]);
 			}
 		}
 	}
@@ -105,6 +116,82 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 			output[i] = output[i] + alpha * (input[i] - output[i]);
 		}
 		return output;
+	}
+
+	// detect sudden movements (sudden spin, tossing phone, etc. that should not influence distance traveled)
+	public boolean catchRotation(float[] input) {
+
+	}
+
+	// find the axis along which the user will move with regards to gravity
+	public int selectAxis(float[] input) {
+		double gravity = 9.8;
+		double window = 1.5;
+		double minWindow = gravity - window;
+		double maxWindow = gravity + window;
+		int count = 0;
+		boolean[] probable = new boolean[input.length];
+		int gAxis = -1;
+		int direction = -1;
+
+		// rope up all probable suspects
+		for (int i = 0; i < input.length; i++) {
+			if (input[i] >= minWindow && input[i] <= maxWindow) {
+				count++;
+				probable[i] = true;
+			}
+		}
+
+		// get the direction of gravity
+		if (count > 1) {
+			int nearest = getNearest(input, gravity);
+			if (nearest == -1) {
+				Log.v("Axis discovery error", "Could not detect gravity (1)");
+			}
+			gAxis = nearest;
+		}
+		else if (count == 1) {
+			for (int i = 0; i < probable.length; i++) {
+				if (probable[i] == true) {
+					gAxis = i;
+				}
+			}
+		}
+		else {	// gravity not detected
+			Log.v("Axis discovery error", "Could not detect gravity (2)");
+		}
+		if (gAxis == -1) {
+			Log.v("Axis discovery error", "Could not detect gravity (3)");
+		}
+
+		//calculate appropriate axis given the axis corresponding to gravity
+		if (gAxis == 0) {
+			direction = 2;
+		}
+		else if (gAxis == 1) {
+			direction = 2;
+		}
+		else if (gAxis == 2) {
+			direction = 1;
+		}
+		else {
+			Log.v("Axis discovery error", "Could not detect direction of travel");
+		}
+		return direction;
+	}
+
+	// helper for returning closest match to target value in input array
+	private int getNearest(float[] input, double target) {
+		double diff = Double.POSITIVE_INFINITY;
+		double nearest = -1;
+		for (int i = 0; i < input.length; i++) {
+			double x = (double)input[i];
+			if (Math.abs(target - x) <= diff) {
+				diff = Math.abs(target - x);
+				nearest = i;
+			}
+		}
+		return nearest;
 	}
 	 
 	@Override
@@ -149,9 +236,9 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 
 	        		double[] velocity = getVelocity(data_as_array, times_as_array);
 	        		double distance = getDistance(velocity, times_as_array);
-	        		Log.v("Sum acceleration", "" + sumArray(data_as_array));
-	        		Log.v("Sum velocity", "" + sumArray(velocity));
-	        		Log.v("Sum time", "" + sumArray(times_as_array));
+	        		//Log.v("Sum acceleration", "" + sumArray(data_as_array));
+	        		//Log.v("Sum velocity", "" + sumArray(velocity));
+	        		//Log.v("Sum time", "" + sumArray(times_as_array));
 	        		accelView.setText("You moved: " + distance);
 	        	}
 	        	else // on == false...START LISTENING
@@ -173,7 +260,7 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 		double distance = 0;
 		double[] durations = getDurations(distribution);
 		int i = 0;
-		Log.v("velocity array length", "" + velocity.length);
+		//Log.v("velocity array length", "" + velocity.length);
 		for (double v : velocity) 
 		{
 			distance += (v * durations[i]);
@@ -189,15 +276,15 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 		double[] durations = getDurations(distribution);
 		//velocity[0] = 0;
 		int i = 0;
-		Log.v("acceleration array length", "" + acceleration.length);
-		Log.v("time array length", "" + durations.length);
+		//Log.v("acceleration array length", "" + acceleration.length);
+		//Log.v("time array length", "" + durations.length);
 		for (double a : acceleration) 
 		{
 			if (i == 0) velocity[i] = 0;
 			else velocity[i] = velocity[i - 1] + a * durations[i];
-			Log.v("dv/dt", "" + a);
-			Log.v("t", "" + durations[i]);
-			Log.v("raw t", "" + distribution[i]);
+			//Log.v("dv/dt", "" + a);
+			//Log.v("t", "" + durations[i]);
+			//Log.v("raw t", "" + distribution[i]);
 			i++;
 		}
 		return velocity;
