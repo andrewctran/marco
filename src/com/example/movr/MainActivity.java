@@ -8,6 +8,9 @@ import android.support.v7.app.ActionBar;
 import android.support.v4.app.Fragment;
 import android.os.Bundle;
 import android.app.Activity;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.SharedPreferences.Editor;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.Menu;
@@ -35,10 +38,20 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 	private ArrayList<Double> data = new ArrayList<Double>();
 	private double[] data_as_array;
 
+	private ArrayList<Integer> axisHistory = new ArrayList<Integer>();
+	private int[] axisHistory_as_array;
+
 	private long start;
 	private ArrayList<Long> times = new ArrayList<Long>();
 	private long[] times_as_array;
 	private Calendar c;
+
+	// accelerometer readings when device is sitting on flat surface
+	private final float[] correction = {0, 0, 0};
+	private boolean calibrating = false;
+	private ArrayList<float[]> calibration_data = new ArrayList<float[]>();
+
+	private SharedPreferences sharedPref;
 
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
@@ -48,6 +61,10 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 		setContentView(R.layout.activity_main);
 		accelView = (TextView)findViewById(R.id.acceltxt);
 		c = Calendar.getInstance(); 
+		getSupportActionBar().setDisplayShowHomeEnabled(false);
+		getSupportActionBar().setDisplayShowTitleEnabled(false);
+		//SharedPreferences sharedPref = MainActivity.this.getPreferences(Context.MODE_PRIVATE);
+		sharedPref = this.getSharedPreferences("com.example.movr.CALIBRATION_DATA", Context.MODE_PRIVATE);
 		
 		// Sensor setup
 		senSensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
@@ -72,27 +89,53 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 		{
 			Sensor mySensor = event.sensor;
 			if (mySensor.getType() == Sensor.TYPE_ACCELEROMETER) 
-			{			
-				times.add(System.currentTimeMillis());
-
-				// PROCESS SENSOR DATA
-				acceleration = highPassFilter(event.values.clone(), prevAcceleration);	// remove DC components
-
-				acceleration = lowPassFilter(event.values.clone(), acceleration);		// double exponential smoothing
-				acceleration = lowPassFilter(event.values.clone(), acceleration);		// (low pass filter)
-
-				// thresholding
-				// run tests in R to find optimal threshold value
-				if (Math.abs(acceleration[1]) < 0.3) {
-					acceleration[1] = (float) 0.0;
+			{	
+				if (calibrating == true) {
+					calibration_data.add(event.values.clone());
 				}
+				else {
+					times.add(System.currentTimeMillis());
 
+					// PROCESS SENSOR DATA
+					acceleration = correct(event.values.clone(), correction);
+					acceleration = highPassFilter(event.values.clone(), prevAcceleration);	// remove DC components
 
-				// which entry do we want??
-				data.add((double)acceleration[1]);
-				Log.v("data.add", "" + acceleration[1]);
+					acceleration = lowPassFilter(event.values.clone(), acceleration);		// double exponential smoothing
+					acceleration = lowPassFilter(event.values.clone(), acceleration);		// (low pass filter)				
+
+					// thresholding
+					// run tests in R to find optimal threshold value
+					// if (Math.abs(acceleration[1]) < 0.3) {
+					// 	acceleration[1] = (float) 0.0;
+					// }
+
+					/* ---FFT---
+						1) remove mean from acceleration data
+						2) take FFT of acceleration data
+						3) convert the transformed accel. data to displacement data by dividing each element by -omega^2, where omega is the frequency band				
+						4) take inverse-FFT to get back to time domain
+						5) scale result
+					*/
+
+					// which entry do we want??
+					int axis = selectAxis(acceleration);
+
+					// log axis in our axis history
+					axisHistory.add(axis);
+
+					// log the acceleration
+					data.add((double)acceleration[1]);
+					//Log.v("data.add", "" + acceleration[axis]);
+				}
 			}
 		}
+	}
+
+	public float[] correct(float[] input, float[] correction_array) {
+		for (int i = 0; i < 3; i++) {
+			input[i] += correction_array[i];
+		}
+		return input;
 	}
 	
 	// High-pass filter to remove DC components
@@ -118,15 +161,58 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 		return output;
 	}
 
-	// detect sudden movements (sudden spin, tossing phone, etc. that should not influence distance traveled)
-	public boolean catchRotation(float[] input) {
+	public double[] kalman(double[] input) {
+		// play with these values
+		double q = 0.000001;
+		double r = 0.01;
 
+		double[] z = new double[input.length + 1];
+		// placeholder to start indices at 1
+		z[0] = 0.0;
+		for (int i = 0; i < 10; i++) {
+			z[i + 1] = (double)input[i];
+		}
+
+		double[] xhat = new double[input.length + 1];
+		double[] xhat_prime = new double[input.length + 1];
+		double[] p = new double[input.length + 1];
+		double[] p_prime = new double[input.length + 1];
+		double[] k = new double[input.length + 1];
+		double[] output = new double[input.length];
+
+		// initial guesses
+		xhat[0] = 1;
+		p[0] = 0.001;
+
+		for (int i = 1; i <= input.length; i++) {
+			// time update
+			xhat_prime[i] = xhat[i - 1];
+			p_prime[i] = p[i - 1] + q;
+
+			// measurement update
+			k[i] = p_prime[i] / (p_prime[i] + r);
+			xhat[i] = xhat_prime[i] + k[i] * (z[i] - xhat_prime[i]);
+			p[i] = (1 - k[i]) * p_prime[i];
+		}
+
+		// just for consistency of indices
+		for (int i = 1; i <= input.length; i++) {
+			output[i - 1] = xhat[i];
+		}
+
+		return output;
 	}
+
+	// detect sudden movements (sudden spin, tossing phone, etc. that should not influence distance traveled)
+	// use SVM to classify based on axis trends
+	// public boolean catchRotation(int[] history) {
+		
+	// }
 
 	// find the axis along which the user will move with regards to gravity
 	public int selectAxis(float[] input) {
 		double gravity = 9.8;
-		double window = 1.5;
+		double window = 2.0;
 		double minWindow = gravity - window;
 		double maxWindow = gravity + window;
 		int count = 0;
@@ -158,7 +244,8 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 			}
 		}
 		else {	// gravity not detected
-			Log.v("Axis discovery error", "Could not detect gravity (2)");
+			//Log.v("Axis discovery error", "Could not detect gravity (2)");
+			return 1;
 		}
 		if (gAxis == -1) {
 			Log.v("Axis discovery error", "Could not detect gravity (3)");
@@ -183,7 +270,7 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 	// helper for returning closest match to target value in input array
 	private int getNearest(float[] input, double target) {
 		double diff = Double.POSITIVE_INFINITY;
-		double nearest = -1;
+		int nearest = -1;
 		for (int i = 0; i < input.length; i++) {
 			double x = (double)input[i];
 			if (Math.abs(target - x) <= diff) {
@@ -230,11 +317,18 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 						count++;
 					}
 
+					// Kalman filter
+					data_as_array = kalman(data_as_array);
+
 					// copy update times from ArrayList to array
 					times_as_array = new long[times.size()];
 					times_as_array = convertLongs(times);
 
 	        		double[] velocity = getVelocity(data_as_array, times_as_array);
+	        		//velocity = kalman(velocity);
+	        		// for (double x : velocity) {
+	        		// 	Log.v("velocity", "" + x);
+	        		// }
 	        		double distance = getDistance(velocity, times_as_array);
 	        		//Log.v("Sum acceleration", "" + sumArray(data_as_array));
 	        		//Log.v("Sum velocity", "" + sumArray(velocity));
@@ -243,7 +337,6 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 	        	}
 	        	else // on == false...START LISTENING
 	        	{ 
-					//start = c.get(Calendar.SECOND);
 					start = System.currentTimeMillis();
 					data.clear();
 					times.clear();
@@ -293,7 +386,7 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 	private double[] getDurations(long[] times) {
 		double[] durations = new double[times.length];
 		for (int i = 0; i < times.length; i++) {
-			System.out.println(times[i]);
+			//System.out.println(times[i]);
 			if (i == 0) durations[i] = times[i] - times[0];
 			else durations[i] = times[i] - times[i - 1];
 		}
@@ -337,6 +430,10 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 	    return ret;
 	}	
 
+	// private float getAverage() {
+
+	// }
+
 	@Override
 	public boolean onCreateOptionsMenu(Menu menu) {
 
@@ -351,7 +448,45 @@ public class MainActivity extends ActionBarActivity implements SensorEventListen
 		// automatically handle clicks on the Home/Up button, so long
 		// as you specify a parent activity in AndroidManifest.xml.
 		int id = item.getItemId();
-		if (id == R.id.action_settings) {
+		int timeRemaining = 10000;
+		if (id == R.id.calibrate) {
+			if (on == false && calibrating == false) {
+
+				// wipe old calibration data
+				calibration_data.clear();
+
+				// start the 10 sec calibration period
+				calibrating = true;
+				accelView.setText("Set the device on a flat surface for " + timeRemaining / 1000 + "s");
+				long calibrationStart = System.currentTimeMillis();
+				while (System.currentTimeMillis() - calibrationStart < 10000) {
+					accelView.setText("Set the device on a flat surface for " + timeRemaining / 1000 + "s");
+				}
+
+				// stop the calibration event
+				calibrating = false;
+
+				accelView.setText("Done! Now take it for a spin!");
+
+				// get correction values from calibration data
+				// using unweighted average
+				float correction_x = 0;
+				float correction_y = 0;
+				float correction_z = 0;
+				for (float[] f : calibration_data) {
+					correction_x += f[0];
+					correction_y += f[1];
+					correction_z += f[2];
+				}
+				correction_x /= calibration_data.size();
+				correction_y /= calibration_data.size();
+				correction_z /= calibration_data.size();
+
+				//SharedPreferences.Editor editor = sharedPref.edit();
+				sharedPref.edit().putFloat("correction_x", correction_x).commit();
+				sharedPref.edit().putFloat("correction_y", correction_y).commit();
+				sharedPref.edit().putFloat("correction_z", correction_z).commit();
+			}
 			return true;
 		}
 		return super.onOptionsItemSelected(item);
